@@ -5,25 +5,293 @@
 //  Created by Skip Koppenhaver on 1/8/14.
 //  Copyright (c) 2014 Skip Koppenhaver. All rights reserved.
 //
-
+#import <sys/utsname.h>
 #import "ViewController.h"
 
-@interface ViewController ()
+static NSString * const kServiceType = @"MPExample";
 
+@interface ViewController ()
+@property (nonatomic, strong) MCSession *session;
+@property (nonatomic, strong) MCNearbyServiceAdvertiser *advertiser;
+@property (nonatomic, strong) MCNearbyServiceBrowser *browser;
+
+@property (nonatomic, weak) IBOutlet UITableView *myTableView;
+@property (nonatomic, weak) IBOutlet UISwitch *browseSwitch;
+@property (nonatomic, weak) IBOutlet UISwitch *advertiseSwitch;
+
+@property (nonatomic, assign) BOOL advertising;
+@property (nonatomic, assign) BOOL browsing;
 @end
 
 @implementation ViewController
 
-- (void)viewDidLoad
-{
+- (void)viewDidLoad {
     [super viewDidLoad];
-	// Do any additional setup after loading the view, typically from a nib.
+
+    // Create myPeerID
+    MCPeerID *myPeerID = [[MCPeerID alloc] initWithDisplayName:[[UIDevice currentDevice] name]];
+
+    // Create session
+    self.session = [[MCSession alloc] initWithPeer:myPeerID
+                                  securityIdentity:nil
+                              encryptionPreference:MCEncryptionNone];
+    self.session.delegate = self;
+
+    // Determine device model
+    struct utsname systemInfo;
+    uname(&systemInfo);
+    NSString *devType = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
+
+    // Create DNS-SD TXT record
+    NSDictionary *txtRecord = @{@"txtvers":@"1",
+                                @"version":[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
+                                @"build":[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"],
+                                @"devtype":devType,
+                                @"devname":[[UIDevice currentDevice] name],
+                                @"sysname":[[UIDevice currentDevice] systemName],
+                                @"sysvers":[[UIDevice currentDevice] systemVersion]};
+
+    // Setup advertiser
+    self.advertiser = [[MCNearbyServiceAdvertiser alloc] initWithPeer:myPeerID
+                                                        discoveryInfo:txtRecord
+                                                          serviceType:kServiceType];
+    self.advertiser.delegate = self;
+
+    // Setup browser
+    self.browser = [[MCNearbyServiceBrowser alloc] initWithPeer:myPeerID
+                                                    serviceType:kServiceType];
+    self.browser.delegate = self;
 }
 
-- (void)didReceiveMemoryWarning
-{
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(saveState) name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(loadState) name:UIApplicationWillEnterForegroundNotification object:nil];
+
+    self.advertising = YES;
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillEnterForegroundNotification object:nil];
+
+    [self.advertiser stopAdvertisingPeer];
+    NSLog(@"Stopped advertising");
+    [self.browser stopBrowsingForPeers];
+    NSLog(@"Stopped browsing");
+    //[self.session disconnect];
+    //NSLog(@"Disconnected");
+}
+
+- (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
     // Dispose of any resources that can be recreated.
+}
+
+- (void)saveState {
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+    if (self.advertising) {
+        [self.advertiser stopAdvertisingPeer];
+        NSLog(@"Stopped advertising");
+    }
+    if (self.browsing) {
+        [self.browser stopBrowsingForPeers];
+        NSLog(@"Stopped browsing");
+    }
+}
+
+- (void)loadState {
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+    if (self.advertising) {
+        [self.advertiser startAdvertisingPeer];
+        NSLog(@"Started advertising...");
+    }
+    if (self.browsing) {
+        [self.browser startBrowsingForPeers];
+        NSLog(@"Started browsing...");
+    }
+}
+
+#pragma mark - Custom accessors
+
+- (void)setAdvertising:(BOOL)value {
+    if (value) {
+        [self.advertiser startAdvertisingPeer];
+        NSLog(@"Started advertising...");
+    }
+    else {
+        [self.advertiser stopAdvertisingPeer];
+        NSLog(@"Stopped advertising");
+    }
+    _advertising = value;
+}
+
+- (void)setBrowsing:(BOOL)value {
+    if (value) {
+        [self.browser startBrowsingForPeers];
+        NSLog(@"Started browsing...");
+    }
+    else {
+        [self.browser stopBrowsingForPeers];
+        NSLog(@"Stopped browsing");
+    }
+    _browsing = value;
+}
+
+#pragma mark - IBActions
+
+- (IBAction)browseSwitchChanged:(id)sender {
+    if (self.browseSwitch.isOn) {
+        self.browsing = YES;
+    }
+    else {
+        self.browsing = NO;
+    }
+}
+
+- (IBAction)advertiseSwitchChanged:(id)sender {
+    if (self.advertiseSwitch.isOn) {
+        self.advertising = YES;
+    }
+    else {
+        self.advertising = NO;
+    }
+}
+
+- (IBAction)disconnect:(id)sender {
+    NSLog(@"Disconnecting");
+    [self.session disconnect];
+}
+
+- (IBAction)showPeers:(id)sender {
+    for (MCPeerID *peer in [self.session connectedPeers]) {
+        NSLog(@"Peer: %@", peer.displayName);
+    }
+    NSLog(@"%lu peers found", (unsigned long)[[self.session connectedPeers] count]);
+}
+
+#pragma mark - MCNearbyServiceBrowserDelegate methods
+
+- (void)browser:(MCNearbyServiceBrowser *)browser foundPeer:(MCPeerID *)peerID withDiscoveryInfo:(NSDictionary *)info {
+    NSLog(@"FoundPeer: %@, %@", peerID.displayName, info);
+
+    // Auto-invite
+    [self.browser invitePeer:peerID toSession:self.session withContext:nil timeout:5.0];
+}
+
+- (void)browser:(MCNearbyServiceBrowser *)browser lostPeer:(MCPeerID *)peerID {
+    NSLog(@"LostPeer: %@", peerID.displayName);
+}
+
+- (void)browser:(MCNearbyServiceBrowser *)browser didNotStartBrowsingForPeers:(NSError *)error {
+    NSLog(@"%s %@", __PRETTY_FUNCTION__, error);
+}
+
+#pragma mark - MCNearbyServiceAdvertiserDelegate methods
+
+- (void)advertiser:(MCNearbyServiceAdvertiser *)advertiser didReceiveInvitationFromPeer:(MCPeerID *)peerID withContext:(NSData *)context invitationHandler:(void (^)(BOOL accept, MCSession *session))invitationHandler {
+    NSLog(@"Invitation from: %@", peerID.displayName);
+
+    // Auto-accept invitation
+    invitationHandler(YES, self.session);
+
+    // Stop advertising once we join the session
+    [advertiser stopAdvertisingPeer];
+    NSLog(@"Stopped advertising");
+
+    // Update UI on main thread
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.advertiseSwitch.on = NO;
+    });
+}
+
+- (void)advertiser:(MCNearbyServiceAdvertiser *)advertiser didNotStartAdvertisingPeer:(NSError *)error {
+    NSLog(@"%s %@", __PRETTY_FUNCTION__, error);
+}
+
+#pragma mark - MCSessionDelegate methods
+
+- (void)session:(MCSession *)session peer:(MCPeerID *)peerID didChangeState:(MCSessionState)state {
+    NSLog(@"%@: %@", [self stringForPeerConnectionState:state], peerID.displayName);
+
+    // Update UI on main thread
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.myTableView reloadData];
+    });
+}
+
+- (void)session:(MCSession *)session didReceiveData:(NSData *)data fromPeer:(MCPeerID *)peerID {
+    // Decode the incoming data to a UTF8 encoded string
+    NSString *msg = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSLog(@"From %@: %@", peerID.displayName, msg);
+}
+
+- (void)session:(MCSession *)session didStartReceivingResourceWithName:(NSString *)resourceName fromPeer:(MCPeerID *)peerID withProgress:(NSProgress *)progress {
+    NSLog(@"%s Resource: %@, Peer: %@, Progress %@", __PRETTY_FUNCTION__, resourceName, peerID.displayName, progress);
+}
+
+- (void)session:(MCSession *)session didFinishReceivingResourceWithName:(NSString *)resourceName fromPeer:(MCPeerID *)peerID atURL:(NSURL *)localURL withError:(NSError *)error {
+    if (error) {
+        NSLog(@"%s Peer: %@, Resource: %@, Error: %@", __PRETTY_FUNCTION__, peerID.displayName, resourceName, [error localizedDescription]);
+    }
+    else {
+        NSLog(@"%s Peer: %@, Resource: %@ complete", __PRETTY_FUNCTION__, peerID.displayName, resourceName);
+    }
+}
+
+- (void)session:(MCSession *)session didReceiveStream:(NSInputStream *)stream withName:(NSString *)streamName fromPeer:(MCPeerID *)peerID {
+    NSLog(@"%s Peer: %@, Stream: %@", __PRETTY_FUNCTION__, peerID.displayName, streamName);
+}
+
+#pragma mark - UITableViewDataSource methods
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return [[self.session connectedPeers] count];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"PlayerCell" forIndexPath:indexPath];
+
+    MCPeerID *peerID = [[self.session connectedPeers] objectAtIndex:indexPath.row];
+    cell.textLabel.text = peerID.displayName;
+
+    return cell;
+}
+
+#pragma mark - UITableViewDelegate methods
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSData *msgData = [@"Hello there!" dataUsingEncoding:NSUTF8StringEncoding];
+
+    NSError *error;
+    MCPeerID *peerID = [[self.session connectedPeers] objectAtIndex:indexPath.row];
+    [self.session sendData:msgData toPeers:@[peerID] withMode:MCSessionSendDataUnreliable error:&error];
+    if (error)
+        NSLog(@"SendData error: %@", error);
+    else
+        NSLog(@"Sent message");
+}
+
+#pragma mark - Helper methods
+
+- (NSString *)stringForPeerConnectionState:(MCSessionState)state {
+    switch (state) {
+        case MCSessionStateConnected:
+            return @"Connected";
+
+        case MCSessionStateConnecting:
+            return @"Connecting";
+
+        case MCSessionStateNotConnected:
+            return @"NotConnected";
+    }
 }
 
 @end
