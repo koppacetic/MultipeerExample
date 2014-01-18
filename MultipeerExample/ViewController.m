@@ -40,8 +40,8 @@ static NSString * const kServiceType = @"MPExample";
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
 
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(saveState) name:UIApplicationWillResignActiveNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(loadState) name:UIApplicationWillEnterForegroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(disconnect:) name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(connect:) name:UIApplicationWillEnterForegroundNotification object:nil];
 
     self.advertising = YES;
 }
@@ -61,30 +61,6 @@ static NSString * const kServiceType = @"MPExample";
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
     // Dispose of any resources that can be recreated.
-}
-
-- (void)saveState {
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-    if (self.advertising) {
-        [self.advertiser stopAdvertisingPeer];
-        NSLog(@"Stopped advertising");
-    }
-    if (self.browsing) {
-        [self.browser stopBrowsingForPeers];
-        NSLog(@"Stopped browsing");
-    }
-}
-
-- (void)loadState {
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-    if (self.advertising) {
-        [self.advertiser startAdvertisingPeer];
-        NSLog(@"Started advertising...");
-    }
-    if (self.browsing) {
-        [self.browser startBrowsingForPeers];
-        NSLog(@"Started browsing...");
-    }
 }
 
 #pragma mark - Custom accessors
@@ -156,6 +132,8 @@ static NSString * const kServiceType = @"MPExample";
 
 - (IBAction)disconnect:(id)sender {
     NSLog(@"Disconnecting");
+    self.advertising = NO;
+    self.browsing = NO;
     [self.session disconnect];
     self.session = nil;
     [self.myTableView reloadData];
