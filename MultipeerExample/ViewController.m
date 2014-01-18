@@ -11,6 +11,7 @@
 static NSString * const kServiceType = @"MPExample";
 
 @interface ViewController ()
+@property (nonatomic, strong) MCPeerID *myPeerID;
 @property (nonatomic, strong) MCSession *session;
 @property (nonatomic, strong) MCNearbyServiceAdvertiser *advertiser;
 @property (nonatomic, strong) MCNearbyServiceBrowser *browser;
@@ -25,42 +26,15 @@ static NSString * const kServiceType = @"MPExample";
 
 @implementation ViewController
 
+#pragma mark - View life cycle
+
 - (void)viewDidLoad {
     [super viewDidLoad];
 
     // Create myPeerID
-    MCPeerID *myPeerID = [[MCPeerID alloc] initWithDisplayName:[[UIDevice currentDevice] name]];
+    self.myPeerID = [[MCPeerID alloc] initWithDisplayName:[[UIDevice currentDevice] name]];
 
-    // Create session
-    self.session = [[MCSession alloc] initWithPeer:myPeerID
-                                  securityIdentity:nil
-                              encryptionPreference:MCEncryptionNone];
-    self.session.delegate = self;
-
-    // Determine device model
-    struct utsname systemInfo;
-    uname(&systemInfo);
-    NSString *devType = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
-
-    // Create DNS-SD TXT record
-    NSDictionary *txtRecord = @{@"txtvers":@"1",
-                                @"version":[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
-                                @"build":[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"],
-                                @"devtype":devType,
-                                @"devname":[[UIDevice currentDevice] name],
-                                @"sysname":[[UIDevice currentDevice] systemName],
-                                @"sysvers":[[UIDevice currentDevice] systemVersion]};
-
-    // Setup advertiser
-    self.advertiser = [[MCNearbyServiceAdvertiser alloc] initWithPeer:myPeerID
-                                                        discoveryInfo:txtRecord
-                                                          serviceType:kServiceType];
-    self.advertiser.delegate = self;
-
-    // Setup browser
-    self.browser = [[MCNearbyServiceBrowser alloc] initWithPeer:myPeerID
-                                                    serviceType:kServiceType];
-    self.browser.delegate = self;
+    [self initializeSession];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -82,8 +56,6 @@ static NSString * const kServiceType = @"MPExample";
     NSLog(@"Stopped advertising");
     [self.browser stopBrowsingForPeers];
     NSLog(@"Stopped browsing");
-    //[self.session disconnect];
-    //NSLog(@"Disconnected");
 }
 
 - (void)didReceiveMemoryWarning {
@@ -127,6 +99,16 @@ static NSString * const kServiceType = @"MPExample";
         NSLog(@"Stopped advertising");
     }
     _advertising = value;
+
+    // Update UI on main thread
+    if ([NSThread isMainThread]) {
+        self.advertiseSwitch.on = value;
+    }
+    else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.advertiseSwitch.on = value;
+        });
+    }
 }
 
 - (void)setBrowsing:(BOOL)value {
@@ -139,6 +121,17 @@ static NSString * const kServiceType = @"MPExample";
         NSLog(@"Stopped browsing");
     }
     _browsing = value;
+
+
+    // Update UI on main thread
+    if ([NSThread isMainThread]) {
+        self.browseSwitch.on = value;
+    }
+    else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.browseSwitch.on = value;
+        });
+    }
 }
 
 #pragma mark - IBActions
@@ -164,6 +157,16 @@ static NSString * const kServiceType = @"MPExample";
 - (IBAction)disconnect:(id)sender {
     NSLog(@"Disconnecting");
     [self.session disconnect];
+    self.session = nil;
+    [self.myTableView reloadData];
+}
+
+- (IBAction)connect:(id)sender {
+    if (!self.session) {
+        NSLog(@"Connecting");
+        [self initializeSession];
+        self.advertising = YES;
+    }
 }
 
 - (IBAction)showPeers:(id)sender {
@@ -178,7 +181,7 @@ static NSString * const kServiceType = @"MPExample";
 - (void)browser:(MCNearbyServiceBrowser *)browser foundPeer:(MCPeerID *)peerID withDiscoveryInfo:(NSDictionary *)info {
     NSLog(@"FoundPeer: %@, %@", peerID.displayName, info);
 
-    // Auto-invite
+    // Auto-invite any peers that are found
     [self.browser invitePeer:peerID toSession:self.session withContext:nil timeout:5.0];
 }
 
@@ -195,17 +198,11 @@ static NSString * const kServiceType = @"MPExample";
 - (void)advertiser:(MCNearbyServiceAdvertiser *)advertiser didReceiveInvitationFromPeer:(MCPeerID *)peerID withContext:(NSData *)context invitationHandler:(void (^)(BOOL accept, MCSession *session))invitationHandler {
     NSLog(@"Invitation from: %@", peerID.displayName);
 
-    // Auto-accept invitation
+    // Auto-accept any invitations received
     invitationHandler(YES, self.session);
 
     // Stop advertising once we join the session
-    [advertiser stopAdvertisingPeer];
-    NSLog(@"Stopped advertising");
-
-    // Update UI on main thread
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.advertiseSwitch.on = NO;
-    });
+    self.advertising = NO;
 }
 
 - (void)advertiser:(MCNearbyServiceAdvertiser *)advertiser didNotStartAdvertisingPeer:(NSError *)error {
@@ -247,6 +244,7 @@ static NSString * const kServiceType = @"MPExample";
 }
 
 - (void)session:(MCSession *)session didReceiveCertificate:(NSArray *)cert fromPeer:(MCPeerID *)peerID certificateHandler:(void(^)(BOOL accept))certHandler {
+    NSLog(@"%s Peer: %@", __PRETTY_FUNCTION__, peerID.displayName);
     certHandler(YES);
 }
 
@@ -285,16 +283,47 @@ static NSString * const kServiceType = @"MPExample";
 
 #pragma mark - Helper methods
 
+- (void)initializeSession {
+    // Create session
+    self.session = [[MCSession alloc] initWithPeer:_myPeerID securityIdentity:nil encryptionPreference:MCEncryptionNone];
+    self.session.delegate = self;
+
+    // Determine device model
+    struct utsname systemInfo;
+    uname(&systemInfo);
+    NSString *devType = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
+
+    // Create DNS-SD TXT record
+    NSDictionary *txtRecord = @{@"txtvers":@"1",
+                                @"version":[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
+                                @"build":[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"],
+                                @"devtype":devType,
+                                @"devname":[[UIDevice currentDevice] name],
+                                @"sysname":[[UIDevice currentDevice] systemName],
+                                @"sysvers":[[UIDevice currentDevice] systemVersion]};
+
+    // Setup advertiser
+    self.advertiser = [[MCNearbyServiceAdvertiser alloc] initWithPeer:_myPeerID discoveryInfo:txtRecord serviceType:kServiceType];
+    self.advertiser.delegate = self;
+
+    // Setup browser
+    self.browser = [[MCNearbyServiceBrowser alloc] initWithPeer:_myPeerID serviceType:kServiceType];
+    self.browser.delegate = self;
+}
+
 - (NSString *)stringForPeerConnectionState:(MCSessionState)state {
     switch (state) {
         case MCSessionStateConnected:
             return @"Connected";
+            break;
 
         case MCSessionStateConnecting:
             return @"Connecting";
+            break;
 
         case MCSessionStateNotConnected:
             return @"NotConnected";
+            break;
     }
 }
 
